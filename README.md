@@ -16,6 +16,8 @@ components/
 apps/
   demo/          hardware demo: touch, beep / record / playback, mic meter, volume,
                  brightness, LED colours, SD free space, Wi-Fi + clock status bar
+  alarm_clock/   bedside alarm clock: big clock face, weather, alarms with a sunrise
+                 wake-up and chime, night dimming
 common/
   sdkconfig.defaults   settings every app needs (PSRAM, flash, RAM tuning, fonts)
   partitions.csv
@@ -29,7 +31,7 @@ project, and list the components it uses in its `main/CMakeLists.txt`.
 
 ```sh
 . ~/esp/esp-idf-v5.5.5/export.sh
-cd apps/demo
+cd apps/demo            # or apps/alarm_clock
 idf.py build
 idf.py -p /dev/cu.usbmodem31301 flash monitor
 ```
@@ -38,6 +40,22 @@ idf.py -p /dev/cu.usbmodem31301 flash monitor
 The panel's reset line is tied to the chip enable pin, and a reset over USB doesn't toggle
 it, so the panel keeps the previous firmware's state and stays black. Later reflashes are
 fine.
+
+## Alarm clock
+
+- Clock face: 24-hour time in a 120px Montserrat digit font (`apps/alarm_clock/fonts/`
+  has the TTF, its OFL licence and `generate.sh`), date, weather, and the next alarm.
+- Alarms (`alarms.c`): up to 5, each with a time, weekdays and an on/off switch, saved in
+  NVS. Edit them from the Alarms screen; "Test alarm" rings immediately.
+- Wake-up (`wake.c`): 10 minutes before an alarm the RGB LED and backlight ramp from dim
+  red to warm white ("Skip this alarm" cancels it); then a synthesized two-note bell
+  repeats, louder each time, until Stop or Snooze (9 min), giving up after 15 minutes.
+- Weather (`weather.c`): location from the public IP address (ipapi.co, falling back to
+  ipwho.is), cached in NVS; conditions from Open-Meteo every 30 minutes. No API keys.
+  Fahrenheit in the US, Celsius elsewhere.
+- Backlight: 70% by day, 6% from 22:00 to 07:00, back to 70% for 15 s after a touch.
+- TLS buffers live in PSRAM (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`); ~78KB of internal RAM
+  stays free after a fetch.
 
 ## Board notes
 
