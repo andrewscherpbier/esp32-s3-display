@@ -70,15 +70,3 @@ app are fine.
   are 32 lines each and the Wi-Fi driver's IRAM speed options are off
   (`sdkconfig.defaults`); Wi-Fi/lwIP buffers prefer PSRAM. About 87KB of internal RAM is
   free after boot (logged by `main`). The app partition is 4MB (`partitions.csv`).
-
-## Factory firmware
-
-A full 16MB dump of the stock firmware is at
-`~/esp/es3c35p-factory-backup/es3c35p-factory-16MB.bin`
-(sha256 `f4f6ea9565684a4034945a50a0094d2c0c7a13d6c7b34925ed149e0e362e9ef1`). To restore:
-
-```sh
-esptool.py --port /dev/cu.usbmodem31301 write_flash \
-  --flash_size keep --flash_mode keep --flash_freq keep \
-  0x0 ~/esp/es3c35p-factory-backup/es3c35p-factory-16MB.bin
-```
