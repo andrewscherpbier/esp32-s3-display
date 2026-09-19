@@ -1,6 +1,7 @@
 #include "tiles.h"
 
 #include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -9,6 +10,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -20,8 +22,20 @@
 #define CACHE_TILES         32          // 128KB each, in PSRAM
 #define PNG_MAX             (96 * 1024)
 #define RETRY_FAILED_US     (30 * 1000000LL)
-#define TILE_URL            "https://basemaps.cartocdn.com/dark_all/%d/%d/%d.png"
-#define DISK_DIR            BSP_SDCARD_MOUNT_POINT "/tiles"
+// Stadia Maps needs a free account; the key comes from menuconfig, which keeps it out of
+// the repository. The style name is part of the cache path so tiles from a different style
+// are never mistaken for these.
+#define TILE_URL            "https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/%d/%d/%d.png?api_key=%s"
+#define MAP_API_KEY         CONFIG_FLIGHT_MAP_API_KEY
+#define DISK_DIR            BSP_SDCARD_MOUNT_POINT "/tiles/stadia"
+
+/*
+ * Dark basemaps are built for data overlays on big screens and can be too dim to read on a
+ * 3.5" panel. Every channel is brightened through this gamma curve as tiles are decoded,
+ * which lifts the dark greys of roads and coastlines more than the near-black background.
+ * 1.0 leaves tiles exactly as the style intends.
+ */
+#define MAP_GAMMA           1.2f
 
 typedef enum {
     TILE_EMPTY,
@@ -46,6 +60,7 @@ static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static QueueHandle_t s_requests;    // tile indexes
 static volatile uint32_t s_generation;
 static bool s_disk;
+static uint8_t s_gamma[256];
 
 // Worker state: one HTTP session kept connected so tiles reuse a TLS connection
 static net_http_session_t s_http;
@@ -54,8 +69,11 @@ static int s_png_len;
 
 static bool fetch_png(int zoom, int x, int y)
 {
-    char url[96];
-    snprintf(url, sizeof(url), TILE_URL, zoom, x, y);
+    if (!MAP_API_KEY[0]) {
+        return false;
+    }
+    char url[160];
+    snprintf(url, sizeof(url), TILE_URL, zoom, x, y, MAP_API_KEY);
     s_png_len = net_http_session_get(s_http, url, (char *)s_png, PNG_MAX);
     return s_png_len > 0;
 }
@@ -95,21 +113,39 @@ static void write_disk(int zoom, int x, int y)
     fclose(f);
 }
 
+/*
+ * Decode the PNG in s_png into the tile's RGB565 buffer.
+ *
+ * LVGL patches lodepng: lodepng_decode*() hands back an lv_draw_buf_t (not raw pixels),
+ * always ARGB8888 whatever format was asked for, allocated with plain malloc. The header
+ * is checked below so a future LVGL change fails loudly instead of drawing rubbish.
+ */
 static bool decode_into(tile_t *tile)
 {
-    unsigned char *rgb = NULL;
+    unsigned char *out = NULL;
     unsigned w = 0, h = 0;
-    unsigned err = lodepng_decode24(&rgb, &w, &h, s_png, s_png_len);
-    if (err || w != GEO_TILE_SIZE || h != GEO_TILE_SIZE) {
-        ESP_LOGW(TAG, "%d/%d/%d: PNG decode failed (%u)", tile->zoom, tile->x, tile->y, err);
-        lv_free(rgb);
+    unsigned err = lodepng_decode32(&out, &w, &h, s_png, s_png_len);
+    lv_draw_buf_t *decoded = (lv_draw_buf_t *)out;
+    if (err || !decoded || w != GEO_TILE_SIZE || h != GEO_TILE_SIZE) {
+        ESP_LOGW(TAG, "%d/%d/%d: PNG decode failed (%u, %ux%u)", tile->zoom, tile->x, tile->y, err, w, h);
+        lv_draw_buf_destroy(decoded);
         return false;
     }
-    for (int i = 0; i < GEO_TILE_SIZE * GEO_TILE_SIZE; i++) {
-        const unsigned char *p = &rgb[i * 3];
-        tile->pixels[i] = ((p[0] >> 3) << 11) | ((p[1] >> 2) << 5) | (p[2] >> 3);
+    if (decoded->header.magic != LV_IMAGE_HEADER_MAGIC || decoded->header.cf != LV_COLOR_FORMAT_ARGB8888) {
+        ESP_LOGE(TAG, "lodepng returned format %d, not the expected ARGB8888 draw buffer", decoded->header.cf);
+        lv_draw_buf_destroy(decoded);
+        return false;
     }
-    lv_free(rgb);
+
+    for (int y = 0; y < GEO_TILE_SIZE; y++) {
+        const uint8_t *row = decoded->data + (size_t)y * decoded->header.stride;
+        uint16_t *dst = &tile->pixels[y * GEO_TILE_SIZE];
+        for (int x = 0; x < GEO_TILE_SIZE; x++) {
+            const uint8_t *p = &row[x * 4];     // B, G, R, A
+            dst[x] = ((s_gamma[p[2]] >> 3) << 11) | ((s_gamma[p[1]] >> 2) << 5) | (s_gamma[p[0]] >> 3);
+        }
+    }
+    lv_draw_buf_destroy(decoded);
     return true;
 }
 
@@ -160,15 +196,22 @@ void tiles_init(void)
     uint64_t total, free;
     s_disk = bsp_sdcard_get_space(&total, &free);
     if (s_disk) {
+        mkdir(BSP_SDCARD_MOUNT_POINT "/tiles", 0777);
         mkdir(DISK_DIR, 0777);
+    }
+    if (!MAP_API_KEY[0]) {
+        ESP_LOGW(TAG, "no map API key: run idf.py menuconfig -> Flight tracker");
     }
     ESP_LOGI(TAG, "disk cache %s", s_disk ? "on SD card" : "off (no SD card)");
 
+    for (int v = 0; v < 256; v++) {
+        s_gamma[v] = (uint8_t)lroundf(255.0f * powf(v / 255.0f, 1.0f / MAP_GAMMA));
+    }
     s_png = heap_caps_malloc(PNG_MAX, MALLOC_CAP_SPIRAM);
     s_http = net_http_session_create();
     for (int i = 0; i < CACHE_TILES; i++) {
         tile_t *t = &s_tiles[i];
-        t->pixels = heap_caps_malloc(GEO_TILE_SIZE * GEO_TILE_SIZE * 2, MALLOC_CAP_SPIRAM);
+        t->pixels = heap_caps_aligned_alloc(64, GEO_TILE_SIZE * GEO_TILE_SIZE * 2, MALLOC_CAP_SPIRAM);
         t->dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
         t->dsc.header.cf = LV_COLOR_FORMAT_RGB565;
         t->dsc.header.w = GEO_TILE_SIZE;
@@ -227,6 +270,11 @@ const lv_image_dsc_t *tiles_get(int zoom, int x, int y, uint32_t frame)
         t->zoom = -1;
     }
     return NULL;
+}
+
+bool tiles_map_key_set(void)
+{
+    return MAP_API_KEY[0] != '\0';
 }
 
 uint32_t tiles_generation(void)

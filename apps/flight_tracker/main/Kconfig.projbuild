@@ -12,6 +12,15 @@ menu "Flight tracker"
         string "Home longitude (decimal degrees, e.g. -0.0015)"
         default ""
 
+    config FLIGHT_MAP_API_KEY
+        string "Stadia Maps API key"
+        default ""
+        help
+            Map tiles come from Stadia Maps ("Alidade Smooth Dark"), which needs a free
+            account: sign up at https://client.stadiamaps.com, add a property, and copy its
+            API key here. Without a key the map stays blank (aircraft still show). Like the
+            coordinates above, this lives in sdkconfig, which isn't committed.
+
     config FLIGHT_START_ZOOM
         int "Starting map zoom"
         range 3 14

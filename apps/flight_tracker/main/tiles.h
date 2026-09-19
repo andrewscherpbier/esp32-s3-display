@@ -1,15 +1,19 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "lvgl.h"
 
 #define TILES_ZOOM_MIN      3
 #define TILES_ZOOM_MAX      14
-#define TILES_ATTRIBUTION   "\xC2\xA9 OpenStreetMap contributors \xC2\xA9 CARTO"
+#define TILES_ATTRIBUTION   "\xC2\xA9 Stadia Maps \xC2\xA9 OpenMapTiles \xC2\xA9 OpenStreetMap contributors"
+
+// False when no map API key is configured, so the UI can say so.
+bool tiles_map_key_set(void);
 
 /**
- * Map tiles (CARTO "Dark Matter", 256x256) with three levels of cache: decoded RGB565
+ * Map tiles (Stadia Maps "Alidade Smooth Dark", 256x256) with three levels of cache: decoded RGB565
  * tiles in PSRAM, PNG files on the SD card under /sdcard/tiles, and finally the network.
  * A background task does the loading and PNG decoding. Works without an SD card, just
  * without the disk cache. Call after the SD card is mounted and Wi-Fi started.

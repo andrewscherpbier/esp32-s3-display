@@ -65,9 +65,14 @@ fine.
 - Aircraft from [adsb.lol](https://adsb.lol), falling back to
   [adsb.fi](https://adsb.fi) (free community ADS-B networks, no key), every 10 s. A
   provider that fails (e.g. rate-limits with HTTP 429) is skipped for 5 minutes.
-- Map: CARTO "Dark Matter" tiles, decoded from PNG on the device and cached in PSRAM and
-  on the SD card (`/sdcard/tiles`), so areas you've seen load instantly and offline.
-  "© OpenStreetMap contributors © CARTO" is shown as their terms require.
+- Map: Stadia Maps "Alidade Smooth Dark" tiles, decoded from PNG on the device and cached
+  in PSRAM (32 tiles) and on the SD card (`/sdcard/tiles/stadia`), so areas you've seen
+  load instantly and offline. "© Stadia Maps © OpenMapTiles © OpenStreetMap contributors"
+  is shown on screen as their terms require. Dark basemaps are dim on a 3.5" panel, so
+  tiles are brightened through a gamma curve as they're decoded (`MAP_GAMMA` in
+  `tiles.c`; 1.0 leaves the style untouched).
+  CARTO's basemaps were the first choice but now stamp "API KEY REQUIRED" across
+  unauthenticated tiles.
 - Plane icons point along the aircraft's track and are coloured by altitude (green low,
   through yellow and orange, to red above 30,000 ft; grey on the ground). Between updates
   positions are extrapolated from speed and track, so they move smoothly.
@@ -78,9 +83,12 @@ fine.
   ~100 airlines (`airlines.c`). The map then stays centred on that aircraft wherever it
   is, with the traffic around it. Regional flights sold under a partner's number often
   broadcast the operator's callsign, so try that if a flight number isn't found.
-- **Home location** is set with `idf.py menuconfig` -> "Flight tracker" (latitude,
-  longitude, starting zoom). That lands in `sdkconfig`, which isn't committed, so your
-  coordinates stay out of this public repo. Left empty, home comes from the IP address.
+- **Setup** is all in `idf.py menuconfig` -> "Flight tracker": home latitude and
+  longitude, starting zoom, and the Stadia Maps API key (free account at
+  <https://client.stadiamaps.com>). Those land in `sdkconfig`, which isn't committed, so
+  neither your coordinates nor the key reach this public repo. With no coordinates home
+  comes from the IP address; with no key the map stays blank and says so, while the
+  aircraft still show.
 
 ## Board notes
 

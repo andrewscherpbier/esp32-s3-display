@@ -288,6 +288,8 @@ static void update_status(void)
     char text[80];
     if (wifi.state != WIFI_STATE_CONNECTED) {
         snprintf(text, sizeof(text), LV_SYMBOL_WIFI "  %s", wifi.state == WIFI_STATE_CONNECTING ? "Connecting..." : "No Wi-Fi - tap to set up");
+    } else if (!tiles_map_key_set()) {
+        snprintf(text, sizeof(text), "No map key: idf.py menuconfig");
     } else if (!s_info.home_known) {
         snprintf(text, sizeof(text), "Finding your location...");
     } else if (s_info.follow == FOLLOW_SEARCHING) {
