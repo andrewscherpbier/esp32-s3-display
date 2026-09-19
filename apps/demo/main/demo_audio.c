@@ -1,48 +1,30 @@
 /*
- * Speaker and microphone on the LCDwiki / Hosyond ES3C35P: an ES8311 codec (I2C 0x18)
- * with an on-board analog mic, feeding an SC8002B amplifier.
- *
- * Pin directions and amplifier polarity follow the xiaozhi-esp32 port for this board
- * (main/boards/lcdwiki-es3c35p), which uses both mic and speaker: GPIO15 is I2S data
- * out, GPIO16 is data in, and the amplifier's shutdown pin (GPIO1) enables it when LOW.
+ * The demo's audio features on top of the board's codec (bsp_audio): a beep, a
+ * 3-second record-and-playback with the recording normalized, and a live mic level.
  *
  * One task owns the codec, so reads, writes and control changes never overlap. While
  * idle it keeps reading the mic to drive the level meter.
  */
-#include "audio.h"
+#include "demo_audio.h"
 
 #include <math.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 
-#include "driver/i2s_std.h"
-#include "es8311_codec.h"
+#include "bsp_audio.h"
 #include "esp_check.h"
 #include "esp_codec_dev.h"
-#include "esp_codec_dev_defaults.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
-#define AUDIO_I2C_PORT      I2C_NUM_0
-#define AUDIO_I2S_PORT      I2S_NUM_0
-#define AUDIO_PIN_MCLK      GPIO_NUM_17
-#define AUDIO_PIN_BCLK      GPIO_NUM_18
-#define AUDIO_PIN_WS        GPIO_NUM_21
-#define AUDIO_PIN_DOUT      GPIO_NUM_15
-#define AUDIO_PIN_DIN       GPIO_NUM_16
-#define AUDIO_PIN_PA        GPIO_NUM_1      // SC8002B shutdown, amplifier on when LOW
-
 #define SAMPLE_RATE         16000
 #define BLOCK_SAMPLES       (SAMPLE_RATE / 50)                  // 20ms
 #define RECORD_SAMPLES      (SAMPLE_RATE * AUDIO_RECORD_SECONDS)
 
-// The ES8311 driver always runs the analog mic PGA at its 30dB maximum; this sets the ADC
-// gain scale on top of it, in 6dB steps up to 42dB.
-#define MIC_GAIN_DB         42.0f
-#define DEFAULT_VOLUME      60
+#define DEFAULT_VOLUME      BSP_AUDIO_DEFAULT_VOLUME
 
 // Recordings are scaled so their peak lands here before playback. The gain is capped so a
 // near-silent clip plays back as quiet room noise rather than amplified hiss.
@@ -59,37 +41,13 @@ typedef enum {
     CMD_RECORD_AND_PLAY,
 } audio_cmd_t;
 
-static const char *TAG = "audio";
+static const char *TAG = "demo_audio";
 
 static esp_codec_dev_handle_t s_codec;
 static QueueHandle_t s_cmds;
 static _Atomic audio_state_t s_state = AUDIO_IDLE;
 static _Atomic int s_mic_level;
 static _Atomic int s_target_volume = DEFAULT_VOLUME;
-
-static esp_err_t i2s_init(i2s_chan_handle_t *tx, i2s_chan_handle_t *rx)
-{
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(AUDIO_I2S_PORT, I2S_ROLE_MASTER);
-    chan_cfg.auto_clear_after_cb = true;    // play silence, not the last buffer, when starved
-    ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, tx, rx), TAG, "i2s_new_channel failed");
-
-    const i2s_std_config_t std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
-        .gpio_cfg = {
-            .mclk = AUDIO_PIN_MCLK,
-            .bclk = AUDIO_PIN_BCLK,
-            .ws = AUDIO_PIN_WS,
-            .dout = AUDIO_PIN_DOUT,
-            .din = AUDIO_PIN_DIN,
-        },
-    };
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(*tx, &std_cfg), TAG, "tx init failed");
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(*rx, &std_cfg), TAG, "rx init failed");
-    ESP_RETURN_ON_ERROR(i2s_channel_enable(*tx), TAG, "tx enable failed");
-    ESP_RETURN_ON_ERROR(i2s_channel_enable(*rx), TAG, "rx enable failed");
-    return ESP_OK;
-}
 
 static int peak_of(const int16_t *samples, int count)
 {
@@ -227,66 +185,14 @@ static void audio_task(void *arg)
 
 esp_err_t audio_init(i2c_master_bus_handle_t bus)
 {
-    i2s_chan_handle_t tx = NULL;
-    i2s_chan_handle_t rx = NULL;
-    ESP_RETURN_ON_ERROR(i2s_init(&tx, &rx), TAG, "I2S init failed");
-
-    audio_codec_i2s_cfg_t i2s_cfg = {
-        .port = AUDIO_I2S_PORT,
-        .rx_handle = rx,
-        .tx_handle = tx,
-    };
-    const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_cfg);
-
-    audio_codec_i2c_cfg_t i2c_cfg = {
-        .port = AUDIO_I2C_PORT,
-        .addr = ES8311_CODEC_DEFAULT_ADDR,
-        .bus_handle = bus,
-    };
-    const audio_codec_ctrl_if_t *ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
-    const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
-    ESP_RETURN_ON_FALSE(data_if && ctrl_if && gpio_if, ESP_FAIL, TAG, "codec interface init failed");
-
-    es8311_codec_cfg_t es8311_cfg = {
-        .ctrl_if = ctrl_if,
-        .gpio_if = gpio_if,
-        .codec_mode = ESP_CODEC_DEV_WORK_MODE_BOTH,
-        .pa_pin = AUDIO_PIN_PA,
-        .pa_reverted = true,
-        .use_mclk = true,
-        .hw_gain = {
-            .pa_voltage = 5.0,
-            .codec_dac_voltage = 3.3,
-        },
-    };
-    const audio_codec_if_t *codec_if = es8311_codec_new(&es8311_cfg);
-    ESP_RETURN_ON_FALSE(codec_if, ESP_FAIL, TAG, "ES8311 not responding at 0x%02X",
-                        ES8311_CODEC_DEFAULT_ADDR >> 1);
-
-    esp_codec_dev_cfg_t dev_cfg = {
-        .dev_type = ESP_CODEC_DEV_TYPE_IN_OUT,
-        .codec_if = codec_if,
-        .data_if = data_if,
-    };
-    s_codec = esp_codec_dev_new(&dev_cfg);
-    ESP_RETURN_ON_FALSE(s_codec, ESP_FAIL, TAG, "esp_codec_dev_new failed");
-
-    esp_codec_dev_sample_info_t fs = {
-        .sample_rate = SAMPLE_RATE,
-        .channel = 1,
-        .bits_per_sample = 16,
-    };
-    ESP_RETURN_ON_FALSE(esp_codec_dev_open(s_codec, &fs) == ESP_CODEC_DEV_OK, ESP_FAIL, TAG,
-                        "codec open failed");
-    esp_codec_dev_set_in_gain(s_codec, MIC_GAIN_DB);
-    esp_codec_dev_set_out_vol(s_codec, DEFAULT_VOLUME);
+    s_codec = bsp_audio_init(bus, SAMPLE_RATE);
+    ESP_RETURN_ON_FALSE(s_codec, ESP_FAIL, TAG, "codec init failed");
 
     s_cmds = xQueueCreate(4, sizeof(audio_cmd_t));
     ESP_RETURN_ON_FALSE(s_cmds, ESP_ERR_NO_MEM, TAG, "queue alloc failed");
     ESP_RETURN_ON_FALSE(xTaskCreate(audio_task, "audio", 4096, NULL, 5, NULL) == pdPASS,
                         ESP_ERR_NO_MEM, TAG, "task create failed");
 
-    ESP_LOGI(TAG, "ES8311 ready, %d Hz mono", SAMPLE_RATE);
     return ESP_OK;
 }
 

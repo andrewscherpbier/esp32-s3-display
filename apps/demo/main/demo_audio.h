@@ -13,9 +13,9 @@ typedef enum {
 #define AUDIO_RECORD_SECONDS 3
 
 /**
- * Bring up the ES8311 codec (on the shared I2C bus from board_i2c_init()), the I2S
- * link and the speaker amplifier, and start the audio task that owns them.
- * The other functions are safe to call from any task, including LVGL callbacks.
+ * Open the board's codec (bsp_audio_init() on the shared I2C bus from bsp_i2c_init())
+ * and start the audio task that owns it. The other functions are safe to call from any
+ * task, including LVGL callbacks.
  */
 esp_err_t audio_init(i2c_master_bus_handle_t bus);
 

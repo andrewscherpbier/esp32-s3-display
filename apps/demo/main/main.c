@@ -1,17 +1,17 @@
 #include <stdio.h>
 
-#include "audio.h"
-#include "board.h"
+#include "bsp_display.h"
+#include "bsp_i2c.h"
+#include "bsp_led.h"
+#include "bsp_sdcard.h"
+#include "bsp_touch.h"
 #include "clock.h"
-#include "display.h"
+#include "demo_audio.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "freertos/FreeRTOS.h"
-#include "esp_heap_caps.h"
-#include "led.h"
-#include "sdcard.h"
 #include "freertos/task.h"
-#include "touch.h"
 #include "wifi.h"
 #include "wifi_screen.h"
 
@@ -20,6 +20,7 @@
 #define BUTTON_WIDTH        ((UI_WIDTH - 2 * BUTTON_GAP) / 3)
 #define DEFAULT_BRIGHTNESS  80
 #define MIN_BRIGHTNESS      10      // keeps the slider from blacking out the screen
+#define CLOCK_TZ            "PST8PDT,M3.2.0,M11.1.0"    // US Pacific
 
 static const char *TAG = "main";
 
@@ -55,7 +56,7 @@ static void led_clicked_cb(lv_event_t *e)
     };
     static int index;
     index = (index + 1) % (int)(sizeof(colors) / sizeof(colors[0]));
-    led_set(colors[index].r, colors[index].g, colors[index].b);
+    bsp_led_set(colors[index].r, colors[index].g, colors[index].b);
 
     lv_obj_t *label = lv_obj_get_child(lv_event_get_target(e), 0);
     lv_label_set_text_fmt(label, "LED: %s", colors[index].name);
@@ -76,7 +77,7 @@ static void brightness_changed_cb(lv_event_t *e)
     lv_obj_t *label = lv_event_get_user_data(e);
     int32_t brightness = lv_slider_get_value(slider);
     lv_label_set_text_fmt(label, "Brightness %" LV_PRId32 "%%", brightness);
-    display_set_brightness(brightness);
+    bsp_display_set_brightness(brightness);
 }
 
 static void audio_status_cb(lv_timer_t *timer)
@@ -113,7 +114,7 @@ static void status_bar_cb(lv_timer_t *timer)
     }
 
     uint64_t sd_total, sd_free;
-    if (sdcard_get_space(&sd_total, &sd_free)) {
+    if (bsp_sdcard_get_space(&sd_total, &sd_free)) {
         // LVGL's own printf has no float support, so format with the C library
         char text[32];
         snprintf(text, sizeof(text), LV_SYMBOL_SD_CARD " %.1f GB free", sd_free / 1e9);
@@ -249,14 +250,14 @@ static void build_ui(bool touch_ok, bool audio_ok)
 
 void app_main(void)
 {
-    lv_display_t *disp = display_init();
-    i2c_master_bus_handle_t i2c_bus = board_i2c_init();
-    lv_indev_t *touch = touch_init(disp, i2c_bus);
+    lv_display_t *disp = bsp_display_init(LV_DISPLAY_ROTATION_90);
+    i2c_master_bus_handle_t i2c_bus = bsp_i2c_init();
+    lv_indev_t *touch = bsp_touch_init(disp, i2c_bus);
     esp_err_t audio_err = audio_init(i2c_bus);
-    led_init();     // logs its own failure; the LED button is then a no-op
-    sdcard_init();  // logs its own failure; the status bar then shows no card
+    bsp_led_init();     // logs its own failure; the LED button is then a no-op
+    bsp_sdcard_init();  // logs its own failure; the status bar then shows no card
     ESP_ERROR_CHECK(wifi_init());
-    clock_init();
+    clock_init(CLOCK_TZ);
 
     lvgl_port_lock(0);
     build_ui(touch != NULL, audio_err == ESP_OK);
@@ -264,7 +265,7 @@ void app_main(void)
 
     // Let LVGL flush the first frame before lighting the panel
     vTaskDelay(pdMS_TO_TICKS(100));
-    display_set_brightness(DEFAULT_BRIGHTNESS);
+    bsp_display_set_brightness(DEFAULT_BRIGHTNESS);
     ESP_LOGI(TAG, "UI is up, touch %s, audio %s; free internal RAM %u KB, PSRAM %u KB",
              touch ? "enabled" : "unavailable", audio_err == ESP_OK ? "enabled" : "unavailable",
              heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,

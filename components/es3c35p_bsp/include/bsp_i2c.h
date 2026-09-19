@@ -7,4 +7,4 @@
  * ES8311 audio codec (0x18) and the expansion header, so every driver on it must use
  * this handle.
  */
-i2c_master_bus_handle_t board_i2c_init(void);
+i2c_master_bus_handle_t bsp_i2c_init(void);

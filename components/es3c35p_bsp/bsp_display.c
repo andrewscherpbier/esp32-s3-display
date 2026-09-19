@@ -13,8 +13,9 @@
  *   - Rotation is done in software: the driver has no swap_xy, and the controller
  *     ignores MADCTL's mirror-X bit, so hardware landscape isn't dependable.
  */
-#include "display.h"
+#include "bsp_display.h"
 
+#include "bsp_pins.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/spi_master.h"
@@ -26,13 +27,6 @@
 #include "esp_lvgl_port.h"
 
 #define LCD_HOST        SPI2_HOST
-#define LCD_PIN_CS      GPIO_NUM_10
-#define LCD_PIN_CLK     GPIO_NUM_12
-#define LCD_PIN_D0      GPIO_NUM_11
-#define LCD_PIN_D1      GPIO_NUM_13
-#define LCD_PIN_D2      GPIO_NUM_14
-#define LCD_PIN_D3      GPIO_NUM_9
-#define LCD_PIN_BL      GPIO_NUM_41     // active high
 
 // Backlight PWM. 25kHz keeps the backlight driver's inductor out of the audible range,
 // as in the xiaozhi-esp32 port for this board.
@@ -137,7 +131,7 @@ static void backlight_init(void)
     ESP_ERROR_CHECK(ledc_timer_config(&timer_cfg));
 
     const ledc_channel_config_t channel_cfg = {
-        .gpio_num = LCD_PIN_BL,
+        .gpio_num = BSP_LCD_BACKLIGHT,
         .speed_mode = BL_LEDC_MODE,
         .channel = BL_LEDC_CHANNEL,
         .timer_sel = BL_LEDC_TIMER,
@@ -146,19 +140,19 @@ static void backlight_init(void)
     ESP_ERROR_CHECK(ledc_channel_config(&channel_cfg));
 }
 
-lv_display_t *display_init(void)
+lv_display_t *bsp_display_init(lv_display_rotation_t rotation)
 {
     backlight_init();
 
     ESP_LOGI(TAG, "Initialize QSPI bus");
     const spi_bus_config_t bus_cfg = ST77922_PANEL_BUS_QSPI_CONFIG(
-        LCD_PIN_CLK, LCD_PIN_D0, LCD_PIN_D1, LCD_PIN_D2, LCD_PIN_D3,
-        PANEL_WIDTH * LCD_BUF_LINES * sizeof(uint16_t));
+        BSP_LCD_CLK, BSP_LCD_D0, BSP_LCD_D1, BSP_LCD_D2, BSP_LCD_D3,
+        BSP_PANEL_WIDTH * LCD_BUF_LINES * sizeof(uint16_t));
     ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &bus_cfg, SPI_DMA_CH_AUTO));
 
     ESP_LOGI(TAG, "Install panel IO");
     esp_lcd_panel_io_handle_t io = NULL;
-    const esp_lcd_panel_io_spi_config_t io_cfg = ST77922_PANEL_IO_QSPI_CONFIG(LCD_PIN_CS, NULL, NULL);
+    const esp_lcd_panel_io_spi_config_t io_cfg = ST77922_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, NULL, NULL);
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_cfg, &io));
 
     ESP_LOGI(TAG, "Install ST77922 panel driver");
@@ -189,10 +183,10 @@ lv_display_t *display_init(void)
     const lvgl_port_display_cfg_t disp_cfg = {
         .io_handle = io,
         .panel_handle = panel,
-        .buffer_size = PANEL_WIDTH * LCD_BUF_LINES,
+        .buffer_size = BSP_PANEL_WIDTH * LCD_BUF_LINES,
         .double_buffer = true,
-        .hres = PANEL_WIDTH,
-        .vres = PANEL_HEIGHT,
+        .hres = BSP_PANEL_WIDTH,
+        .vres = BSP_PANEL_HEIGHT,
         .monochrome = false,
         .color_format = LV_COLOR_FORMAT_RGB565,
         .flags = {
@@ -205,13 +199,13 @@ lv_display_t *display_init(void)
     ESP_RETURN_ON_FALSE(disp, NULL, TAG, "lvgl_port_add_disp failed");
     lvgl_port_lock(0);
     lv_display_add_event_cb(disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
-    lv_display_set_rotation(disp, DISPLAY_ROTATION);
+    lv_display_set_rotation(disp, rotation);
     lvgl_port_unlock();
 
     return disp;
 }
 
-void display_set_brightness(int percent)
+void bsp_display_set_brightness(int percent)
 {
     percent = percent < 0 ? 0 : percent > 100 ? 100 : percent;
     // Perceived brightness is roughly the square root of duty, so square the percentage
