@@ -1,0 +1,15 @@
+# Flight tracker settings, layered on ../../common/sdkconfig.defaults
+
+# TLS buffers in PSRAM, keeping internal RAM free
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# Put ordinary malloc() allocations above 256 bytes in PSRAM: LVGL objects for ~150 planes
+# and labels would otherwise eat the internal RAM that Wi-Fi and the display need
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=256
+
+# LVGL allocates with malloc() (so big buffers land in PSRAM), and decodes PNG map tiles
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_LODEPNG=y
+
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_24=y

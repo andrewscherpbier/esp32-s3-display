@@ -1,0 +1,22 @@
+menu "Flight tracker"
+
+    config FLIGHT_HOME_LAT
+        string "Home latitude (decimal degrees, e.g. 51.4779)"
+        default ""
+        help
+            Centre of the home view. Leave empty (with the longitude) to use the approximate
+            location from the IP address. Stored in sdkconfig, which isn't committed, so it
+            stays out of the repository.
+
+    config FLIGHT_HOME_LON
+        string "Home longitude (decimal degrees, e.g. -0.0015)"
+        default ""
+
+    config FLIGHT_START_ZOOM
+        int "Starting map zoom"
+        range 3 14
+        default 10
+        help
+            10 shows roughly 20 nautical miles around home; each step halves or doubles it.
+
+endmenu

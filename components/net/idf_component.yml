@@ -1,4 +1,4 @@
-description: Wi-Fi station with on-screen (LVGL) setup, and an NTP-synced clock
+description: Wi-Fi station with on-screen (LVGL) setup, NTP clock, HTTPS GET and IP geolocation
 dependencies:
   idf: ">=5.4"
   lvgl/lvgl: "^9.4.0"
