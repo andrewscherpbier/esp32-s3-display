@@ -33,9 +33,10 @@
  * Dark basemaps are built for data overlays on big screens and can be too dim to read on a
  * 3.5" panel. Every channel is brightened through this gamma curve as tiles are decoded,
  * which lifts the dark greys of roads and coastlines more than the near-black background.
- * 1.0 leaves tiles exactly as the style intends.
+ * 1.0 leaves tiles exactly as the style intends, which is right for this style: its land
+ * is #333333 rather than the #080808 of the darkest basemaps.
  */
-#define MAP_GAMMA           1.2f
+#define MAP_GAMMA           1.0f
 
 typedef enum {
     TILE_EMPTY,
@@ -173,20 +174,30 @@ static void tiles_task(void *arg)
         }
 
         bool ok = s_disk && read_disk(zoom, x, y);
-        if (!ok && wifi_up() && fetch_png(zoom, x, y)) {
+        bool from_disk = ok;
+        // Wi-Fi comes up a few seconds after boot; until then a missing tile isn't a
+        // failure, so leave the entry empty to be asked for again rather than making the
+        // map wait out the failure delay.
+        bool offline = !ok && !wifi_up();
+        if (!ok && !offline && fetch_png(zoom, x, y)) {
             ok = true;
             if (s_disk) {
                 write_disk(zoom, x, y);
             }
         }
         ok = ok && decode_into(tile);
+        ESP_LOGD(TAG, "%d/%d/%d %s from %s", zoom, x, y, ok ? "loaded" : offline ? "deferred, offline" : "failed", from_disk ? "SD card" : "network");
 
         portENTER_CRITICAL(&s_lock);
         if (tile->state == TILE_LOADING && tile->zoom == zoom && tile->x == x && tile->y == y) {
-            tile->state = ok ? TILE_READY : TILE_FAILED;
+            tile->state = ok ? TILE_READY : offline ? TILE_EMPTY : TILE_FAILED;
+            tile->zoom = ok || !offline ? tile->zoom : -1;
             tile->failed_at = esp_timer_get_time();
         }
         portEXIT_CRITICAL(&s_lock);
+        if (offline) {
+            vTaskDelay(pdMS_TO_TICKS(500));     // don't spin while there's no network
+        }
         s_generation++;
     }
 }

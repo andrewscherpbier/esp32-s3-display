@@ -27,6 +27,12 @@ static void url_host(const char *url, char *host, size_t len)
     host[n] = '\0';
 }
 
+// Length of the URL without its query string, which can hold an API key
+static int loggable(const char *url)
+{
+    return (int)strcspn(url, "?");
+}
+
 static void drop_connection(net_http_session_t s)
 {
     if (s->client) {
@@ -75,7 +81,7 @@ int net_http_session_get(net_http_session_t s, const char *url, char *buf, int s
 
     // open() reuses the connection if the previous response was read to the end
     if (esp_http_client_open(s->client, 0) != ESP_OK) {
-        ESP_LOGW(TAG, "%s: connection failed", url);
+        ESP_LOGW(TAG, "%.*s: connection failed", loggable(url), url);
         drop_connection(s);
         return -1;
     }
@@ -89,10 +95,10 @@ int net_http_session_get(net_http_session_t s, const char *url, char *buf, int s
     buf[total] = '\0';
     bool complete = esp_http_client_is_complete_data_received(s->client);
     if (status != 200) {
-        ESP_LOGW(TAG, "%s: HTTP %d", url, status);
+        ESP_LOGW(TAG, "%.*s: HTTP %d", loggable(url), url, status);
         total = -1;
     } else if (!complete) {
-        ESP_LOGW(TAG, "%s: response larger than %d bytes, or cut short", url, size - 1);
+        ESP_LOGW(TAG, "%.*s: response larger than %d bytes, or cut short", loggable(url), url, size - 1);
         total = -1;
     }
     if (!complete) {
