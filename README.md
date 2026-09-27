@@ -12,12 +12,15 @@ Built with ESP-IDF v5.5.5 and LVGL 9.
 components/
   es3c35p_bsp/   board support: I2C bus, display + LVGL + backlight, touch, audio codec,
                  RGB LED, microSD. All GPIOs are in include/bsp_pins.h
-  net/           Wi-Fi station with on-screen setup (LVGL), NTP clock
+  net/           Wi-Fi station with on-screen setup (LVGL), NTP clock, HTTPS GET with
+                 keep-alive sessions, IP geolocation
 apps/
   demo/          hardware demo: touch, beep / record / playback, mic meter, volume,
                  brightness, LED colours, SD free space, Wi-Fi + clock status bar
   alarm_clock/   bedside alarm clock: big clock face, weather, alarms with a sunrise
                  wake-up and chime, night dimming
+  flight_tracker/ live aircraft around home on a dark map, zoom and pan, details on
+                 tap, and a mode that follows one flight anywhere
 common/
   sdkconfig.defaults   settings every app needs (PSRAM, flash, RAM tuning, fonts)
   partitions.csv
@@ -31,7 +34,7 @@ project, and list the components it uses in its `main/CMakeLists.txt`.
 
 ```sh
 . ~/esp/esp-idf-v5.5.5/export.sh
-cd apps/demo            # or apps/alarm_clock
+cd apps/demo            # or apps/alarm_clock, apps/flight_tracker
 idf.py build
 idf.py -p /dev/cu.usbmodem31301 flash monitor
 ```
@@ -56,6 +59,36 @@ fine.
 - Backlight: 70% by day, 6% from 22:00 to 07:00, back to 70% for 15 s after a touch.
 - TLS buffers live in PSRAM (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`); ~78KB of internal RAM
   stays free after a fetch.
+
+## Flight tracker
+
+- Aircraft from [adsb.lol](https://adsb.lol), falling back to
+  [adsb.fi](https://adsb.fi) (free community ADS-B networks, no key), every 10 s. A
+  provider that fails (e.g. rate-limits with HTTP 429) is skipped for 5 minutes.
+- Map: Stadia Maps "Alidade Smooth Dark" tiles, decoded from PNG on the device and cached
+  in PSRAM (32 tiles) and on the SD card (`/sdcard/tiles/stadia`), so areas you've seen
+  load instantly and offline. "© Stadia Maps © OpenMapTiles © OpenStreetMap contributors"
+  is shown on screen as their terms require. Dark basemaps are dim on a 3.5" panel, so
+  tiles are brightened through a gamma curve as they're decoded (`MAP_GAMMA` in
+  `tiles.c`; 1.0 leaves the style untouched).
+  CARTO's basemaps were the first choice but now stamp "API KEY REQUIRED" across
+  unauthenticated tiles.
+- Plane icons point along the aircraft's track and are coloured by altitude (green low,
+  through yellow and orange, to red above 30,000 ft; grey on the ground). Between updates
+  positions are extrapolated from speed and track, so they move smoothly.
+- Drag to pan, +/- to zoom (levels 3-14), home button to recentre. Tap a plane for its
+  callsign, type, registration, altitude, climb rate, speed and track, and to follow it.
+- Follow mode (target button): type a flight number (`UA123`), callsign (`UAL123`) or
+  registration (`N12345`). Flight numbers are translated to callsigns with a table of
+  ~100 airlines (`airlines.c`). The map then stays centred on that aircraft wherever it
+  is, with the traffic around it. Regional flights sold under a partner's number often
+  broadcast the operator's callsign, so try that if a flight number isn't found.
+- **Setup** is all in `idf.py menuconfig` -> "Flight tracker": home latitude and
+  longitude, starting zoom, and the Stadia Maps API key (free account at
+  <https://client.stadiamaps.com>). Those land in `sdkconfig`, which isn't committed, so
+  neither your coordinates nor the key reach this public repo. With no coordinates home
+  comes from the IP address; with no key the map stays blank and says so, while the
+  aircraft still show.
 
 ## Board notes
 

@@ -4,12 +4,12 @@
 #include <string.h>
 
 #include "cJSON.h"
-#include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
-#include "esp_http_client.h"
+#include "geoip.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "net_http.h"
 #include "nvs.h"
 #include "wifi.h"
 
@@ -18,56 +18,12 @@
 #define RESPONSE_MAX        4096
 #define NVS_NAMESPACE       "weather"
 
-// Two no-key IP geolocation services with the same field names; the second is a fallback
-static const char *const LOCATE_URLS[] = {
-    "https://ipapi.co/json/",
-    "https://ipwho.is/",
-};
-
-typedef struct {
-    double latitude;
-    double longitude;
-    char city[48];
-    char country[4];
-} location_t;
+typedef geoip_location_t location_t;
 
 static const char *TAG = "weather";
 
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static weather_t s_weather;
-
-// GET `url` into `buf`; returns the body length, or -1 on any failure.
-static int https_get(const char *url, char *buf, int size)
-{
-    const esp_http_client_config_t cfg = {
-        .url = url,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = 10000,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) {
-        return -1;
-    }
-    int total = -1;
-    if (esp_http_client_open(client, 0) == ESP_OK) {
-        esp_http_client_fetch_headers(client);
-        int status = esp_http_client_get_status_code(client);
-        total = 0;
-        int n;
-        while (total < size - 1 && (n = esp_http_client_read(client, buf + total, size - 1 - total)) > 0) {
-            total += n;
-        }
-        buf[total] = '\0';
-        if (status != 200) {
-            ESP_LOGW(TAG, "%s: HTTP %d", url, status);
-            total = -1;
-        }
-    } else {
-        ESP_LOGW(TAG, "%s: connection failed", url);
-    }
-    esp_http_client_cleanup(client);
-    return total;
-}
 
 static bool load_location(location_t *loc)
 {
@@ -91,34 +47,6 @@ static void save_location(const location_t *loc)
     }
 }
 
-static bool locate(location_t *loc, char *buf)
-{
-    for (int i = 0; i < sizeof(LOCATE_URLS) / sizeof(LOCATE_URLS[0]); i++) {
-        if (https_get(LOCATE_URLS[i], buf, RESPONSE_MAX) < 0) {
-            continue;
-        }
-        cJSON *root = cJSON_Parse(buf);
-        const cJSON *lat = cJSON_GetObjectItem(root, "latitude");
-        const cJSON *lon = cJSON_GetObjectItem(root, "longitude");
-        const cJSON *city = cJSON_GetObjectItem(root, "city");
-        const cJSON *country = cJSON_GetObjectItem(root, "country_code");
-        bool ok = cJSON_IsNumber(lat) && cJSON_IsNumber(lon);
-        if (ok) {
-            memset(loc, 0, sizeof(*loc));
-            loc->latitude = lat->valuedouble;
-            loc->longitude = lon->valuedouble;
-            strlcpy(loc->city, cJSON_IsString(city) ? city->valuestring : "", sizeof(loc->city));
-            strlcpy(loc->country, cJSON_IsString(country) ? country->valuestring : "", sizeof(loc->country));
-        }
-        cJSON_Delete(root);
-        if (ok) {
-            ESP_LOGI(TAG, "location: %s, %s (%.2f, %.2f)", loc->city, loc->country, loc->latitude, loc->longitude);
-            return true;
-        }
-    }
-    return false;
-}
-
 static bool fetch(const location_t *loc, char *buf)
 {
     // The US (and a couple of others) use Fahrenheit
@@ -130,7 +58,7 @@ static bool fetch(const location_t *loc, char *buf)
              "&current=temperature_2m,weather_code,is_day"
              "&daily=temperature_2m_max,temperature_2m_min&forecast_days=1&timezone=auto%s",
              loc->latitude, loc->longitude, fahrenheit ? "&temperature_unit=fahrenheit" : "");
-    if (https_get(url, buf, RESPONSE_MAX) < 0) {
+    if (net_https_get(url, buf, RESPONSE_MAX) < 0) {
         return false;
     }
 
@@ -183,7 +111,7 @@ static void weather_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(2000));
             continue;
         }
-        if (!located && (located = locate(&loc, buf))) {
+        if (!located && (located = geoip_locate(&loc, buf, RESPONSE_MAX))) {
             save_location(&loc);
         }
         bool ok = located && fetch(&loc, buf);
